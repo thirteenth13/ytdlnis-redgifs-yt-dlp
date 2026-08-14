@@ -1,0 +1,119 @@
+name: Build patched yt-dlp
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 4 * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: redgifs-patched-yt-dlp
+  cancel-in-progress: false
+
+jobs:
+  build-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout patch repository
+        uses: actions/checkout@v4
+
+      - name: Clone current yt-dlp
+        run: |
+          git clone --depth=1 https://github.com/yt-dlp/yt-dlp.git upstream
+
+      - name: Apply RedGifs thumbnail patch
+        working-directory: upstream
+        run: |
+          python ../patch_redgifs.py
+          python -m py_compile yt_dlp/extractor/redgifs.py
+          grep -n -A14 -B2 "'thumbnail': (" yt_dlp/extractor/redgifs.py
+
+      - name: Set build version and origin
+        id: version
+        working-directory: upstream
+        shell: bash
+        run: |
+          VERSION="$(date -u +'%Y.%m.%d.%H%M%S')"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          python devscripts/update-version.py -c stable -r "${GITHUB_REPOSITORY}" "${VERSION}"
+
+      - name: Build platform-independent yt-dlp
+        working-directory: upstream
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y zip make
+          python devscripts/make_lazy_extractors.py
+          make yt-dlp
+          chmod +x yt-dlp
+          ./yt-dlp --version
+
+      - name: Create updater metadata
+        working-directory: upstream
+        shell: bash
+        run: |
+          sha256sum yt-dlp > SHA2-256SUMS
+          # Reuse upstream's compatibility locks. The generic lock rules remain
+          # useful; repo-specific lockV2 rules for yt-dlp/yt-dlp are harmless.
+          curl -fL \
+            https://github.com/yt-dlp/yt-dlp/releases/latest/download/_update_spec \
+            -o _update_spec
+
+      - name: Smoke-test patched metadata code
+        working-directory: upstream
+        shell: bash
+        run: |
+          python - <<'PY'
+          from yt_dlp.extractor.redgifs import RedGifsBaseIE
+
+          sample = {
+              'id': 'CloudyIgnorantGhostShrimp',
+              'height': 720,
+              'width': 1280,
+              'urls': {
+                  'hd': 'https://example.invalid/video.mp4',
+                  'poster': 'https://example.invalid/poster.jpg',
+              },
+              'tags': ['test'],
+          }
+
+          ie = object.__new__(RedGifsBaseIE)
+          info = ie._parse_gif_data(sample)
+          assert info['thumbnail'] == 'https://example.invalid/poster.jpg', info
+          print('Thumbnail patch smoke test: OK')
+          PY
+
+      - name: Replace latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        working-directory: upstream
+        shell: bash
+        run: |
+          # Keep only one release so @latest always points to this build.
+          OLD_TAGS="$(gh release list \
+            --repo "${GITHUB_REPOSITORY}" \
+            --limit 20 \
+            --json tagName \
+            --jq '.[].tagName' || true)"
+
+          gh release create "${VERSION}" \
+            yt-dlp \
+            SHA2-256SUMS \
+            _update_spec \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "RedGifs thumbnail yt-dlp ${VERSION}" \
+            --notes "yt-dlp master with RedGifs thumbnail metadata patch for YTDLnis." \
+            --latest
+
+          for tag in ${OLD_TAGS}; do
+            if [ "${tag}" != "${VERSION}" ]; then
+              gh release delete "${tag}" \
+                --repo "${GITHUB_REPOSITORY}" \
+                --yes \
+                --cleanup-tag || true
+            fi
+          done
+          
