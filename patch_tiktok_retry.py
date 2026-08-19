@@ -38,40 +38,28 @@ if 'retrying TikTok app API with a fresh device session' not in text:
         sys.exit(2)
     text = text.replace(old_app, new_app, 1)
 
-# Authenticated TikTok web requests are frequently rejected by the normal
-# Python HTTP fingerprint even when the cookies are valid. YTDLnis ships
-# curl_cffi, so automatically request Chrome impersonation whenever a login
-# cookie is present. This mirrors the manually verified --impersonate chrome.
+# Current upstream already uses impersonate=True for TikTok webpages. Keep that
+# behavior, but add one retry for transient 403 responses. Older upstream shapes
+# are also supported so the patch remains tolerant of yt-dlp updates.
+old_current_get = '''        def get_webpage(note='Downloading webpage'):
+            res = self._download_webpage_handle(
+                url, video_id, note, fatal=fatal, headers=headers, impersonate=True)
+            if res is False:
+                return False
+
+            webpage, urlh = res
+            self.write_debug(f'Webpage size: {len(webpage)} bytes')
+            self.write_debug(f'Impersonation target: {urlh.extensions.get("impersonate")}')
+'''
+
 old_get = '''        def get_webpage(note='Downloading webpage'):
             res = self._download_webpage_handle(url, video_id, note, fatal=fatal, headers=headers)
             if res is False:
                 return False
-'''
-new_get = '''        def get_webpage(note='Downloading webpage'):
-            cookie_names = set(self._get_cookies('https://www.tiktok.com/'))
-            use_auth_impersonation = bool(cookie_names & {'sessionid', 'sessionid_ss', 'sid_tt'})
-            if use_auth_impersonation:
-                self.write_debug('Using Chrome impersonation for authenticated TikTok webpage request')
 
-            res = None
-            for web_attempt in range(2):
-                try:
-                    res = self._download_webpage_handle(
-                        url, video_id, note, fatal=fatal, headers=headers,
-                        impersonate='chrome' if use_auth_impersonation else None)
-                    break
-                except ExtractorError as e:
-                    status = getattr(e.cause, 'status', None)
-                    if status != 403 or web_attempt:
-                        raise
-                    self.report_warning('TikTok returned HTTP 403; retrying webpage once after a short delay', video_id=video_id)
-                    time.sleep(random.uniform(2.0, 4.0))
-                    headers.update(self._generate_blockbuster_headers())
-            if res is False:
-                return False
+            webpage, urlh = res
 '''
 
-# Support updating both pristine upstream and our previous retry-patched shape.
 old_retry_get = '''        def get_webpage(note='Downloading webpage'):
             res = None
             for web_attempt in range(2):
@@ -87,10 +75,44 @@ old_retry_get = '''        def get_webpage(note='Downloading webpage'):
                     headers.update(self._generate_blockbuster_headers())
             if res is False:
                 return False
+
+            webpage, urlh = res
+'''
+
+new_get = '''        def get_webpage(note='Downloading webpage'):
+            cookie_names = set(self._get_cookies('https://www.tiktok.com/'))
+            use_auth_impersonation = bool(cookie_names & {'sessionid', 'sessionid_ss', 'sid_tt'})
+            if use_auth_impersonation:
+                self.write_debug('Using Chrome impersonation for authenticated TikTok webpage request')
+
+            res = None
+            for web_attempt in range(2):
+                try:
+                    res = self._download_webpage_handle(
+                        url, video_id, note, fatal=fatal, headers=headers,
+                        impersonate='chrome' if use_auth_impersonation else True)
+                    break
+                except ExtractorError as e:
+                    status = getattr(e.cause, 'status', None)
+                    if status != 403 or web_attempt:
+                        raise
+                    self.report_warning(
+                        'TikTok returned HTTP 403; retrying webpage once after a short delay',
+                        video_id=video_id)
+                    time.sleep(random.uniform(2.0, 4.0))
+                    headers.update(self._generate_blockbuster_headers())
+            if res is False:
+                return False
+
+            webpage, urlh = res
+            self.write_debug(f'Webpage size: {len(webpage)} bytes')
+            self.write_debug(f'Impersonation target: {urlh.extensions.get("impersonate")}')
 '''
 
 if 'Using Chrome impersonation for authenticated TikTok webpage request' not in text:
-    if old_get in text:
+    if old_current_get in text:
+        text = text.replace(old_current_get, new_get, 1)
+    elif old_get in text:
         text = text.replace(old_get, new_get, 1)
     elif old_retry_get in text:
         text = text.replace(old_retry_get, new_get, 1)
