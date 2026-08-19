@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: redgifs-patched-yt-dlp
+  group: patched-yt-dlp
   cancel-in-progress: false
 
 jobs:
@@ -24,16 +24,109 @@ jobs:
         run: |
           git clone --depth=1 https://github.com/yt-dlp/yt-dlp.git upstream
 
-      - name: Apply RedGifs thumbnail patch
+      - name: Apply RedGifs and TikTok patches
         working-directory: upstream
         run: |
           python ../patch_redgifs.py
+          python ../patch_tiktok.py
           python -m py_compile yt_dlp/extractor/redgifs.py
-          grep -n -A14 -B2 "'thumbnail': (" yt_dlp/extractor/redgifs.py
+          python -m py_compile yt_dlp/extractor/tiktok.py
+          grep -n -A5 -B2 "musical_ly/35.1.3/2023501030/1233" yt_dlp/extractor/tiktok.py
+          grep -n -A12 -B2 "_parse_aweme_slideshow_app" yt_dlp/extractor/tiktok.py
 
       - name: Set build version and origin
         id: version
         working-directory: upstream
+        shell: bash
+        run: |
+          VERSION="$(date -u +'%Y.%m.%d.%H%M%S')"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          python devscripts/update-version.py -c stable -r "${GITHUB_REPOSITORY}" "${VERSION}"
+
+      - name: Build platform-independent yt-dlp
+        working-directory: upstream
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y zip make
+          python devscripts/make_lazy_extractors.py
+          make yt-dlp
+          chmod +x yt-dlp
+          ./yt-dlp --version
+
+      - name: Create updater metadata
+        working-directory: upstream
+        shell: bash
+        run: |
+          sha256sum yt-dlp > SHA2-256SUMS
+          curl -fL \
+            https://github.com/yt-dlp/yt-dlp/releases/latest/download/_update_spec \
+            -o _update_spec
+
+      - name: Smoke-test RedGifs patch
+        working-directory: upstream
+        shell: bash
+        run: |
+          python - <<'PY'
+          from yt_dlp.extractor.redgifs import RedGifsBaseIE
+          sample = {
+              'id': 'CloudyIgnorantGhostShrimp',
+              'height': 720,
+              'width': 1280,
+              'urls': {
+                  'hd': 'https://example.invalid/video.mp4',
+                  'poster': 'https://example.invalid/poster.jpg',
+              },
+              'tags': ['test'],
+          }
+          ie = object.__new__(RedGifsBaseIE)
+          info = ie._parse_gif_data(sample)
+          assert info['thumbnail'] == 'https://example.invalid/poster.jpg', info
+          print('RedGifs thumbnail smoke test: OK')
+          PY
+
+      - name: Smoke-test TikTok slideshow parser
+        working-directory: upstream
+        shell: bash
+        run: |
+          python - <<'PY'
+          from yt_dlp.extractor.tiktok import TikTokBaseIE
+          sample = {
+              'aweme_id': '123456789',
+              'desc': 'test slideshow',
+              'image_post_info': {
+                  'images': [
+                      {'display_image': {'url_list': ['https://example.invalid/1.jpg']}},
+                      {'download_url': {'url_list': ['https://example.invalid/2.webp']}},
+                  ],
+              },
+          }
+          ie = object.__new__(TikTokBaseIE)
+          result = ie._parse_aweme_slideshow_app(sample)
+          assert result['_type'] == 'playlist', result
+          entries = list(result['entries'])
+          assert len(entries) == 2, entries
+          assert entries[0]['url'].endswith('/1.jpg'), entries
+          assert entries[1]['url'].endswith('/2.webp'), entries
+          print('TikTok slideshow smoke test: OK')
+          PY
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        working-directory: upstream
+        shell: bash
+        run: |
+          gh release create "${VERSION}" \
+            yt-dlp \
+            SHA2-256SUMS \
+            _update_spec \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "Patched yt-dlp ${VERSION}" \
+            --notes "yt-dlp master with RedGifs thumbnail support and TikTok Android/video + slideshow image support." \
+            --latest
+
+          # Keep all previous releases/tags.
         shell: bash
         run: |
           VERSION="$(date -u +'%Y.%m.%d.%H%M%S')"
