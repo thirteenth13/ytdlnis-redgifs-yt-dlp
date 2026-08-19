@@ -49,15 +49,19 @@ helper = '''    def _parse_aweme_slideshow_app(self, aweme_detail):
             image_url = first_image_url(image)
             if not image_url:
                 continue
+            ext = determine_ext(image_url, default_ext='jpg')
             entries.append({
                 'id': f'{aweme_id}_{index:02d}',
                 'title': f'{truncate_string(description, left=64)} [{index:02d}]',
-                'url': image_url,
-                'ext': determine_ext(image_url, default_ext='jpg'),
-                'vcodec': 'none',
-                'acodec': 'none',
+                'formats': [{
+                    'format_id': '0',
+                    'url': image_url,
+                    'ext': ext,
+                    'vcodec': 'images',
+                    'acodec': 'none',
+                    'http_headers': {'Referer': self._WEBPAGE_HOST},
+                }],
                 'thumbnail': image_url,
-                'http_headers': {'Referer': self._WEBPAGE_HOST},
             })
 
         if not entries:
@@ -134,15 +138,20 @@ web_helper = '''    def _parse_aweme_slideshow_web(self, aweme_detail, webpage_u
             image_url = first_image_url(image)
             if not image_url:
                 continue
+            image_url = self._proto_relative_url(image_url)
+            ext = determine_ext(image_url, default_ext='jpg')
             entries.append({
                 'id': f'{video_id}_{index:02d}',
                 'title': f'{truncate_string(description, left=64)} [{index:02d}]',
-                'url': self._proto_relative_url(image_url),
-                'ext': determine_ext(image_url, default_ext='jpg'),
-                'vcodec': 'none',
-                'acodec': 'none',
-                'thumbnail': self._proto_relative_url(image_url),
-                'http_headers': {'Referer': webpage_url},
+                'formats': [{
+                    'format_id': '0',
+                    'url': image_url,
+                    'ext': ext,
+                    'vcodec': 'images',
+                    'acodec': 'none',
+                    'http_headers': {'Referer': webpage_url},
+                }],
+                'thumbnail': image_url,
             })
 
         if not entries:
@@ -265,4 +274,4 @@ if "all(f.get('vcodec') == 'images' for f in formats)" not in ydl:
     ydl_path.write_text(ydl, encoding="utf-8")
     print(f"Patched {ydl_path}")
 
-print("TikTok: videos unchanged; slideshow images auto-selected and downloadable by default")
+print("TikTok: videos unchanged; slideshow entries expose real image formats and auto-select images by default")
