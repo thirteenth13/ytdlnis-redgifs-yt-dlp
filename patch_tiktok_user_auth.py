@@ -5,6 +5,10 @@ import sys
 path = Path('yt_dlp/extractor/tiktok.py')
 text = path.read_text(encoding='utf-8')
 
+# This patch runs after patch_tiktok_auth_cookies.py. That earlier patch already
+# adds authenticated-cookie handling to the custom username -> secUid web API,
+# so only patch blocks that still need profile/feed Chrome impersonation here.
+
 # 1) Authenticated profile page: use Chrome impersonation when login cookies exist.
 old_profile = '''        else:
             webpage = self._download_webpage(
@@ -50,33 +54,6 @@ if 'Using Chrome impersonation for authenticated TikTok user feed requests' not 
         print('ERROR: Could not locate TikTokUserIE user-feed request block', file=sys.stderr)
         sys.exit(3)
     text = text.replace(old_entries, new_entries, 1)
-
-# 3) Our username -> secUid web API fallback should also impersonate Chrome with login cookies.
-old_webapi = '''        user_data = self._download_json(
-            'https://www.tiktok.com/api/user/detail/', user_name,
-            note='Resolving secondary user ID with TikTok web API',
-            errnote='Unable to resolve secondary user ID with TikTok web API',
-            fatal=False,
-            headers=self._generate_blockbuster_headers(),
-            query={
-'''
-new_webapi = '''        cookie_names = set(self._get_cookies('https://www.tiktok.com/'))
-        use_auth_impersonation = bool(cookie_names & {'sessionid', 'sessionid_ss', 'sid_tt'})
-        user_data = self._download_json(
-            'https://www.tiktok.com/api/user/detail/', user_name,
-            note='Resolving secondary user ID with TikTok web API',
-            errnote='Unable to resolve secondary user ID with TikTok web API',
-            fatal=False,
-            headers=self._generate_blockbuster_headers(),
-            impersonate='chrome' if use_auth_impersonation else None,
-            query={
-'''
-
-if "impersonate='chrome' if use_auth_impersonation else None,\n            query={" not in text:
-    if old_webapi not in text:
-        print('ERROR: Could not locate custom TikTok user-detail web API block', file=sys.stderr)
-        sys.exit(4)
-    text = text.replace(old_webapi, new_webapi, 1)
 
 path.write_text(text, encoding='utf-8')
 print(f'Patched {path}: authenticated TikTok user profile/feed requests use Chrome impersonation')
