@@ -5,11 +5,9 @@ import sys
 path = Path('yt_dlp/extractor/tiktok.py')
 text = path.read_text(encoding='utf-8')
 
-# This patch runs after patch_tiktok_auth_cookies.py. That earlier patch already
-# adds authenticated-cookie handling to the custom username -> secUid web API,
-# so only patch blocks that still need profile/feed Chrome impersonation here.
+# This patch runs after patch_tiktok_auth_cookies.py. Add Chrome impersonation
+# to private profile/feed requests and persist secUid mappings in yt-dlp cache.
 
-# 1) Authenticated profile page: use Chrome impersonation when login cookies exist.
 old_profile = '''        else:
             webpage = self._download_webpage(
                 self._UPLOADER_URL_FORMAT % user_name, user_name,
@@ -34,12 +32,29 @@ if 'Using Chrome impersonation for authenticated TikTok user profile request' no
         sys.exit(2)
     text = text.replace(old_profile, new_profile, 1)
 
-# 2) User feed pages used by -I playlist selection should use the same authenticated browser fingerprint.
-old_entries = '''                response = self._download_json(
+old_entries = '''    def _entries(self, sec_uid, user_name, fail_early=False):
+        display_id = user_name or sec_uid
+        seen_ids = set()
+'''
+new_entries = '''    def _entries(self, sec_uid, user_name, fail_early=False):
+        display_id = user_name or sec_uid
+        if user_name and isinstance(sec_uid, str) and sec_uid.startswith('MS4wLjABAAAA'):
+            self._downloader.cache.store('tiktok-secuid', user_name, sec_uid)
+            self.write_debug(f'Cached TikTok secUid for @{user_name}')
+        seen_ids = set()
+'''
+
+if "Cached TikTok secUid for @{user_name}" not in text:
+    if old_entries not in text:
+        print('ERROR: Could not locate TikTokUserIE._entries start', file=sys.stderr)
+        sys.exit(3)
+    text = text.replace(old_entries, new_entries, 1)
+
+old_feed = '''                response = self._download_json(
                     self._API_BASE_URL, display_id, f'Downloading page {page}',
                     query=self._build_web_query(sec_uid, cursor))
 '''
-new_entries = '''                cookie_names = set(self._get_cookies('https://www.tiktok.com/'))
+new_feed = '''                cookie_names = set(self._get_cookies('https://www.tiktok.com/'))
                 use_auth_impersonation = bool(cookie_names & {'sessionid', 'sessionid_ss', 'sid_tt'})
                 if use_auth_impersonation and page == 1:
                     self.write_debug('Using Chrome impersonation for authenticated TikTok user feed requests')
@@ -50,10 +65,10 @@ new_entries = '''                cookie_names = set(self._get_cookies('https://w
 '''
 
 if 'Using Chrome impersonation for authenticated TikTok user feed requests' not in text:
-    if old_entries not in text:
+    if old_feed not in text:
         print('ERROR: Could not locate TikTokUserIE user-feed request block', file=sys.stderr)
-        sys.exit(3)
-    text = text.replace(old_entries, new_entries, 1)
+        sys.exit(4)
+    text = text.replace(old_feed, new_feed, 1)
 
 path.write_text(text, encoding='utf-8')
-print(f'Patched {path}: authenticated TikTok user profile/feed requests use Chrome impersonation')
+print(f'Patched {path}: authenticated TikTok user profile/feed requests use Chrome impersonation and cache secUid')
