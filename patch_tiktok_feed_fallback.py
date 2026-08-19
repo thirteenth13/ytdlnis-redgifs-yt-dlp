@@ -5,6 +5,48 @@ import sys
 path = Path('yt_dlp/extractor/tiktok.py')
 text = path.read_text(encoding='utf-8')
 
+# Cache secUid whenever ANY successfully parsed TikTok video exposes it.
+# YTDLnis starts separate yt-dlp processes, so persistent yt-dlp cache is used.
+app_author = '''        author_info = traverse_obj(aweme_detail, ('author', {
+            'uploader': ('unique_id', {str}),
+            'uploader_id': ('uid', {str_or_none}),
+            'channel': ('nickname', {str}),
+            'channel_id': ('sec_uid', {str}),
+        }))
+'''
+app_author_new = app_author + '''        if traverse_obj(author_info, ('uploader', {str})) and traverse_obj(author_info, ('channel_id', {str})):
+            cached_user = author_info['uploader']
+            cached_sec_uid = author_info['channel_id']
+            if cached_sec_uid.startswith('MS4wLjABAAAA'):
+                self._downloader.cache.store('tiktok-secuid', cached_user, cached_sec_uid)
+                self.write_debug(f'Cached TikTok secUid from video metadata for @{cached_user}')
+'''
+if 'Cached TikTok secUid from video metadata for @' not in text:
+    if app_author not in text:
+        print('ERROR: Could not locate TikTok app author metadata block', file=sys.stderr)
+        sys.exit(10)
+    text = text.replace(app_author, app_author_new, 1)
+
+web_author = '''        author_info = traverse_obj(aweme_detail, (('authorInfo', 'author', None), {
+            'channel': ('nickname', {str}),
+            'channel_id': (('authorSecId', 'secUid'), {str}),
+            'uploader': (('uniqueId', 'author'), {str}),
+            'uploader_id': (('authorId', 'uid', 'id'), {str_or_none}),
+        }), get_all=False)
+'''
+web_author_new = web_author + '''        if traverse_obj(author_info, ('uploader', {str})) and traverse_obj(author_info, ('channel_id', {str})):
+            cached_user = author_info['uploader']
+            cached_sec_uid = author_info['channel_id']
+            if cached_sec_uid.startswith('MS4wLjABAAAA'):
+                self._downloader.cache.store('tiktok-secuid', cached_user, cached_sec_uid)
+                self.write_debug(f'Cached TikTok secUid from web video metadata for @{cached_user}')
+'''
+if 'Cached TikTok secUid from web video metadata for @' not in text:
+    if web_author not in text:
+        print('ERROR: Could not locate TikTok web author metadata block', file=sys.stderr)
+        sys.exit(11)
+    text = text.replace(web_author, web_author_new, 1)
+
 helper_marker = "    def _real_extract(self, url):\n"
 helper = '''    def _extract_aweme_from_user_feed(self, url, video_id):
         # Last-resort fallback for authenticated/private TikTok posts.
@@ -59,7 +101,10 @@ helper = '''    def _extract_aweme_from_user_feed(self, url, video_id):
             if not sec_uid:
                 sec_uid = user_ie._extract_sec_uid_from_embed(user_name)
             if not sec_uid:
-                self.report_warning('Unable to resolve TikTok secUid for user-feed fallback', video_id=video_id)
+                self.report_warning(
+                    'Unable to resolve TikTok secUid for user-feed fallback. '
+                    'Open/download any working video from this account once so its secUid can be cached',
+                    video_id=video_id)
                 return None
 
             if isinstance(sec_uid, str) and sec_uid.startswith('MS4wLjABAAAA'):
@@ -141,4 +186,4 @@ if 'trying TikTok user-feed fallback' not in text:
 
 path.write_text(text, encoding='utf-8')
 print(f'Patched {path}')
-print('TikTok: private-profile secUid is persistently cached; user-feed fallback searches up to 250 pages')
+print('TikTok: secUid cached from successful videos; private-profile fallback searches up to 250 pages')
