@@ -146,8 +146,10 @@ jobs:
           assert result['_type'] == 'playlist', result
           entries = list(result['entries'])
           assert len(entries) == 2, entries
-          assert entries[0]['url'].endswith('/1.jpg'), entries
-          assert entries[1]['url'].endswith('/2.webp'), entries
+          assert entries[0]['formats'][0]['url'].endswith('/1.jpg'), entries
+          assert entries[1]['formats'][0]['url'].endswith('/2.webp'), entries
+          assert entries[0]['formats'][0]['vcodec'] == 'images', entries
+          assert entries[1]['formats'][0]['vcodec'] == 'images', entries
           print('TikTok slideshow smoke test: OK')
           PY
 
