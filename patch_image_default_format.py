@@ -2,6 +2,31 @@
 from pathlib import Path
 import sys
 
+# First normalize the custom TikTok slideshow child formats. yt-dlp's common-field
+# processing treats image extensions as codec-less (vcodec=none, acodec=none), so
+# selecting them with a vcodec=images filter does not work after sanitization.
+tiktok_path = Path('yt_dlp/extractor/tiktok.py')
+tiktok = tiktok_path.read_text(encoding='utf-8')
+old_image_format = '''                    'format_id': '0',
+                    'url': image_url,
+                    'ext': ext,
+                    'vcodec': 'images',
+                    'acodec': 'none',
+'''
+new_image_format = '''                    'format_id': 'tiktok_image',
+                    'url': image_url,
+                    'ext': ext,
+                    'vcodec': 'none',
+                    'acodec': 'none',
+'''
+if old_image_format in tiktok:
+    tiktok = tiktok.replace(old_image_format, new_image_format)
+    tiktok_path.write_text(tiktok, encoding='utf-8')
+
+if "'format_id': 'tiktok_image'" not in tiktok_path.read_text(encoding='utf-8'):
+    print('ERROR: TikTok slideshow image format marker missing', file=sys.stderr)
+    sys.exit(1)
+
 path = Path('yt_dlp/YoutubeDL.py')
 text = path.read_text(encoding='utf-8')
 
@@ -30,12 +55,12 @@ if "return 'tiktok_image'" not in text:
         text = text.replace(old, new, 1)
     else:
         print('ERROR: Could not locate YoutubeDL._default_format_spec', file=sys.stderr)
-        sys.exit(1)
+        sys.exit(2)
     path.write_text(text, encoding='utf-8')
 
 check = path.read_text(encoding='utf-8')
 if "return 'tiktok_image'" not in check:
     print('ERROR: TikTok image default format patch missing after write', file=sys.stderr)
-    sys.exit(2)
+    sys.exit(3)
 
-print("Patched yt_dlp/YoutubeDL.py: TikTok slideshow entries default to exact format id 'tiktok_image'")
+print("Patched TikTok slideshow images: exact format id 'tiktok_image' is selected by default")
