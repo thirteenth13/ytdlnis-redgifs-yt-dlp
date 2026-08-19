@@ -25,13 +25,7 @@ helper = '''    def _parse_aweme_slideshow_app(self, aweme_detail):
         # Return a playlist of slideshow images, or None for a normal video.
         aweme_id = aweme_detail.get('aweme_id')
         image_post = aweme_detail.get('image_post_info') or {}
-
-        images = (
-            image_post.get('images')
-            or image_post.get('image_list')
-            or aweme_detail.get('images')
-            or []
-        )
+        images = image_post.get('images') or image_post.get('image_list') or aweme_detail.get('images') or []
         if not isinstance(images, list) or not images:
             return None
 
@@ -56,12 +50,11 @@ helper = '''    def _parse_aweme_slideshow_app(self, aweme_detail):
             image_url = first_image_url(image)
             if not image_url:
                 continue
-            ext = determine_ext(image_url, default_ext='jpg')
             entries.append({
                 'id': f'{aweme_id}_{index:02d}',
                 'title': f'{truncate_string(description, left=64)} [{index:02d}]',
                 'url': image_url,
-                'ext': ext,
+                'ext': determine_ext(image_url, default_ext='jpg'),
                 'vcodec': 'none',
                 'acodec': 'none',
                 'thumbnail': image_url,
@@ -70,18 +63,13 @@ helper = '''    def _parse_aweme_slideshow_app(self, aweme_detail):
 
         if not entries:
             return None
-
-        return self.playlist_result(
-            entries,
-            playlist_id=aweme_id,
-            playlist_title=truncate_string(description, left=72),
-        )
+        return self.playlist_result(entries, playlist_id=aweme_id, playlist_title=truncate_string(description, left=72))
 
 '''
 
 if "_parse_aweme_slideshow_app" not in text:
     if helper_marker not in text:
-        print("ERROR: Could not locate helper insertion marker", file=sys.stderr)
+        print("ERROR: Could not locate slideshow helper insertion marker", file=sys.stderr)
         sys.exit(3)
     text = text.replace(helper_marker, helper + helper_marker, 1)
 
@@ -95,7 +83,6 @@ new_extract = '''        if not aweme_detail:
         slideshow = self._parse_aweme_slideshow_app(aweme_detail)
         if slideshow:
             return slideshow
-
         return self._parse_aweme_video_app(aweme_detail)
 '''
 
@@ -105,5 +92,49 @@ if "slideshow = self._parse_aweme_slideshow_app(aweme_detail)" not in text:
         sys.exit(4)
     text = text.replace(old_extract, new_extract, 1)
 
+# TikTokUserIE fallback: resolve username -> secUid through the Android app API
+# when TikTok's webpage/embed path is blocked or missing rehydration data.
+user_marker = "    def _extract_sec_uid_from_embed(self, user_name):\n"
+user_helper = '''    def _extract_sec_uid_from_app(self, user_name):
+        try:
+            user_data = self._call_api(
+                'user/detail', user_name,
+                query={'unique_id': user_name}, fatal=False,
+                note='Resolving secondary user ID with Android API',
+                errnote='Unable to resolve secondary user ID with Android API') or {}
+        except ExtractorError as e:
+            self.report_warning(f'Android API user lookup failed: {e}')
+            return None
+
+        return traverse_obj(user_data, (
+            ('user', 'user_info', 'userInfo'),
+            ('sec_uid', 'secUid'), {str}, any))
+
+'''
+
+if "def _extract_sec_uid_from_app" not in text:
+    if user_marker not in text:
+        print("ERROR: Could not locate TikTokUserIE secUid insertion marker", file=sys.stderr)
+        sys.exit(5)
+    text = text.replace(user_marker, user_helper + user_marker, 1)
+
+old_fallback = '''            else:
+                sec_uid = self._extract_sec_uid_from_embed(user_name)
+                fail_early = False
+'''
+new_fallback = '''            else:
+                sec_uid = self._extract_sec_uid_from_app(user_name)
+                if not sec_uid:
+                    sec_uid = self._extract_sec_uid_from_embed(user_name)
+                fail_early = False
+'''
+
+if "sec_uid = self._extract_sec_uid_from_app(user_name)" not in text:
+    if old_fallback not in text:
+        print("ERROR: Could not locate TikTokUserIE fallback block", file=sys.stderr)
+        sys.exit(6)
+    text = text.replace(old_fallback, new_fallback, 1)
+
 path.write_text(text, encoding="utf-8")
 print(f"Patched {path}")
+print("TikTok: Android app profile + video/slideshow parser + username->secUid API fallback enabled")
