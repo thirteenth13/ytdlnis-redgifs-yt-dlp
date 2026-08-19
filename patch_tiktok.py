@@ -22,7 +22,6 @@ if "musical_ly/35.1.3/2023501030/1233" not in text:
 
 helper_marker = "    def _solve_challenge_and_set_cookies(self, webpage):\n"
 helper = '''    def _parse_aweme_slideshow_app(self, aweme_detail):
-        # Return a playlist of slideshow images, or None for a normal video.
         aweme_id = aweme_detail.get('aweme_id')
         image_post = aweme_detail.get('image_post_info') or {}
         images = image_post.get('images') or image_post.get('image_list') or aweme_detail.get('images') or []
@@ -92,9 +91,6 @@ if "slideshow = self._parse_aweme_slideshow_app(aweme_detail)" not in text:
         sys.exit(4)
     text = text.replace(old_extract, new_extract, 1)
 
-# Web fallback for slideshow/photo posts. This path is used when TikTok's
-# Android app API is rate-limited/returns empty JSON but the webpage/profile
-# item data still contains imagePost metadata.
 web_parser_marker = "    def _parse_aweme_video_web(self, aweme_detail, webpage_url, video_id, extract_flat=False):\n"
 web_helper = '''    def _parse_aweme_slideshow_web(self, aweme_detail, webpage_url, video_id):
         image_post = (
@@ -181,7 +177,6 @@ if "slideshow = self._parse_aweme_slideshow_web(aweme_detail, webpage_url, video
         sys.exit(8)
     text = text.replace(old_web_start, new_web_start, 1)
 
-# TikTokUserIE fallbacks for username -> secUid resolution.
 user_marker = "    def _extract_sec_uid_from_embed(self, user_name):\n"
 user_helpers = '''    def _extract_sec_uid_from_web_api(self, user_name):
         user_data = self._download_json(
@@ -246,4 +241,28 @@ if "sec_uid = self._extract_sec_uid_from_web_api(user_name)" not in text:
 
 path.write_text(text, encoding="utf-8")
 print(f"Patched {path}")
-print("TikTok: Android app profile + normal video path + app/web slideshow images + profile secUid fallbacks enabled")
+
+# yt-dlp deliberately excludes image-only formats from its normal default selector.
+# For image-only entries (such as our TikTok slideshow children), choose the image
+# format automatically. Normal video/audio entries retain upstream selection.
+ydl_path = Path("yt_dlp/YoutubeDL.py")
+ydl = ydl_path.read_text(encoding="utf-8")
+old_fmt = '''    def _default_format_spec(self, info_dict):
+        prefer_best = (
+'''
+new_fmt = '''    def _default_format_spec(self, info_dict):
+        formats = self._get_formats(info_dict)
+        if formats and all(f.get('vcodec') == 'images' for f in formats):
+            return '*[vcodec=images]'
+
+        prefer_best = (
+'''
+if "all(f.get('vcodec') == 'images' for f in formats)" not in ydl:
+    if old_fmt not in ydl:
+        print("ERROR: Could not locate YoutubeDL._default_format_spec", file=sys.stderr)
+        sys.exit(9)
+    ydl = ydl.replace(old_fmt, new_fmt, 1)
+    ydl_path.write_text(ydl, encoding="utf-8")
+    print(f"Patched {ydl_path}")
+
+print("TikTok: videos unchanged; slideshow images auto-selected and downloadable by default")
