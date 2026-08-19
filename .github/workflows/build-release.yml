@@ -31,6 +31,7 @@ jobs:
           python ../patch_tiktok.py
           python ../patch_tiktok_retry.py
           python ../patch_tiktok_feed_fallback.py
+          python ../patch_tiktok_auth_cookies.py
           python ../patch_image_default_format.py
           python -m py_compile yt_dlp/extractor/redgifs.py
           python -m py_compile yt_dlp/extractor/tiktok.py
@@ -39,6 +40,7 @@ jobs:
           grep -n -A12 -B2 "_parse_aweme_slideshow_app" yt_dlp/extractor/tiktok.py
           grep -n -A5 -B2 "retrying TikTok app API with a fresh device session" yt_dlp/extractor/tiktok.py
           grep -n -A8 -B2 "trying TikTok user-feed fallback" yt_dlp/extractor/tiktok.py
+          grep -n -A10 -B2 "Preferring authenticated TikTok web path before app API" yt_dlp/extractor/tiktok.py
           grep -n -A4 -B2 "return '\*\[vcodec=images\]'" yt_dlp/YoutubeDL.py
 
       - name: Verify image-only default selector
@@ -76,7 +78,7 @@ jobs:
           chmod +x yt-dlp
           ./yt-dlp --version
 
-      - name: Verify built executable contains image selector patch
+      - name: Verify built executable contains custom patches
         working-directory: upstream
         run: |
           ./yt-dlp --help >/dev/null
@@ -87,7 +89,9 @@ jobs:
           assert "return '*[vcodec=images]'" in data
           tiktok = z.read('yt_dlp/extractor/tiktok.py').decode('utf-8')
           assert 'trying TikTok user-feed fallback' in tiktok
-          print('Built yt-dlp contains image selector and TikTok user-feed fallback: OK')
+          assert 'Preferring authenticated TikTok web path before app API' in tiktok
+          assert 'authenticated web path failed, trying TikTok app API' in tiktok
+          print('Built yt-dlp contains image selector, user-feed fallback, and authenticated-cookie priority: OK')
           PY
 
       - name: Create updater metadata
@@ -160,7 +164,7 @@ jobs:
             _update_spec \
             --repo "${GITHUB_REPOSITORY}" \
             --title "Patched yt-dlp ${VERSION}" \
-            --notes "yt-dlp master with RedGifs thumbnail support and TikTok video/slideshow support, conservative retries, image-only selection, and user-feed fallback." \
+            --notes "yt-dlp master with RedGifs thumbnail support and TikTok video/slideshow support, authenticated-cookie priority for private content, conservative retries, image-only selection, and user-feed fallback." \
             --latest
 
           # Keep all previous releases/tags.
