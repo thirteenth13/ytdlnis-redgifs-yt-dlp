@@ -71,3 +71,68 @@ it again.
 If upstream changes the structure of `redgifs.py`, the workflow intentionally
 fails instead of silently applying a wrong patch. Update `patch_redgifs.py`
 when that happens.
+
+# TikTok patch bundle for ytdlnis-redgifs-yt-dlp
+
+This extends the existing RedGifs-patched yt-dlp build.
+
+## Normal TikTok videos
+
+The build uses this Android app profile by default:
+
+    /musical_ly/35.1.3/2023501030/1233
+
+This is the profile that successfully returned API metadata in the Android/YTDLnis test.
+
+Normal videos still use upstream `_parse_aweme_video_app()`.
+If app API lookup fails, upstream webpage fallback remains unchanged.
+
+## TikTok photo/slideshow posts
+
+When the app API returns `image_post_info.images` (or compatible image-list forms),
+the extractor returns a yt-dlp playlist containing the individual image URLs.
+
+Expected output is individual files such as:
+
+    7604865440145280263_01.jpg
+    7604865440145280263_02.jpg
+    7604865440145280263_03.webp
+
+No MP4 is created and ffmpeg is not used to combine images.
+
+## Release history fix
+
+The included workflow does not delete old GitHub releases/tags, avoiding YTDLnis
+errors when it still references an older concrete tag.
+
+## Install
+
+Repository:
+
+    thirteenth13/ytdlnis-redgifs-yt-dlp
+
+1. Upload `patch_tiktok.py` to the repository root.
+2. Replace `.github/workflows/build-release.yml` with `build-release.yml`.
+3. Keep the existing `patch_redgifs.py`.
+4. Run Actions -> Build patched yt-dlp -> Run workflow.
+5. Install/update the new custom yt-dlp build in YTDLnis.
+
+## Test normal video
+
+    yt-dlp --verbose "NORMAL_TIKTOK_VIDEO_URL"
+
+Debug should contain:
+
+    'app_name': 'musical_ly'
+    'app_version': '35.1.3'
+    'manifest_app_version': '2023501030'
+    'aid': '1233'
+
+## Test slideshow
+
+    yt-dlp --verbose "TIKTOK_SLIDESHOW_URL"
+
+Expected: a playlist of individual image entries instead of only the music MP3.
+
+TikTok changes frequently. The patch script fails safely if upstream changes the
+specific code blocks it expects.
