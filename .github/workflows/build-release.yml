@@ -32,6 +32,7 @@ jobs:
           python ../patch_tiktok_retry.py
           python ../patch_tiktok_feed_fallback.py
           python ../patch_tiktok_auth_cookies.py
+          python ../patch_tiktok_user_auth.py
           python ../patch_image_default_format.py
           python -m py_compile yt_dlp/extractor/redgifs.py
           python -m py_compile yt_dlp/extractor/tiktok.py
@@ -41,6 +42,8 @@ jobs:
           grep -n -A5 -B2 "retrying TikTok app API with a fresh device session" yt_dlp/extractor/tiktok.py
           grep -n -A8 -B2 "trying TikTok user-feed fallback" yt_dlp/extractor/tiktok.py
           grep -n -A10 -B2 "Preferring authenticated TikTok web path before app API" yt_dlp/extractor/tiktok.py
+          grep -n -A8 -B2 "Using Chrome impersonation for authenticated TikTok user profile request" yt_dlp/extractor/tiktok.py
+          grep -n -A8 -B2 "Using Chrome impersonation for authenticated TikTok user feed requests" yt_dlp/extractor/tiktok.py
           grep -n -A4 -B2 "return 'tiktok_image'" yt_dlp/YoutubeDL.py
 
       - name: Verify TikTok image default selector
@@ -94,7 +97,9 @@ jobs:
           assert 'trying TikTok user-feed fallback' in tiktok
           assert 'Preferring authenticated TikTok web path before app API' in tiktok
           assert 'authenticated web path failed, trying TikTok app API' in tiktok
-          print('Built yt-dlp contains TikTok image selector, user-feed fallback, and authenticated-cookie priority: OK')
+          assert 'Using Chrome impersonation for authenticated TikTok user profile request' in tiktok
+          assert 'Using Chrome impersonation for authenticated TikTok user feed requests' in tiktok
+          print('Built yt-dlp contains TikTok image selector, private-profile impersonation, user-feed fallback, and authenticated-cookie priority: OK')
           PY
 
       - name: Create updater metadata
@@ -171,7 +176,7 @@ jobs:
             _update_spec \
             --repo "${GITHUB_REPOSITORY}" \
             --title "Patched yt-dlp ${VERSION}" \
-            --notes "yt-dlp master with RedGifs thumbnail support and TikTok video/slideshow support, authenticated-cookie priority for private content, conservative retries, exact image-format selection, and user-feed fallback." \
+            --notes "yt-dlp master with RedGifs thumbnail support and TikTok video/slideshow support, authenticated private-profile Chrome impersonation, conservative retries, exact image-format selection, and user-feed fallback." \
             --latest
 
           # Keep all previous releases/tags.
