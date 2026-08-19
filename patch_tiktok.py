@@ -92,10 +92,30 @@ if "slideshow = self._parse_aweme_slideshow_app(aweme_detail)" not in text:
         sys.exit(4)
     text = text.replace(old_extract, new_extract, 1)
 
-# TikTokUserIE fallback: resolve username -> secUid through the Android app API
-# when TikTok's webpage/embed path is blocked or missing rehydration data.
+# TikTokUserIE fallbacks for username -> secUid resolution.
 user_marker = "    def _extract_sec_uid_from_embed(self, user_name):\n"
-user_helper = '''    def _extract_sec_uid_from_app(self, user_name):
+user_helpers = '''    def _extract_sec_uid_from_web_api(self, user_name):
+        # TikTok's web user-detail endpoint can expose secUid even when the
+        # profile HTML/rehydration block is unavailable on Android.
+        user_data = self._download_json(
+            'https://www.tiktok.com/api/user/detail/', user_name,
+            note='Resolving secondary user ID with TikTok web API',
+            errnote='Unable to resolve secondary user ID with TikTok web API',
+            fatal=False,
+            headers=self._generate_blockbuster_headers(),
+            query={
+                'aid': '1988',
+                'app_name': 'tiktok_web',
+                'device_platform': 'web_pc',
+                'uniqueId': user_name,
+            }) or {}
+
+        return traverse_obj(user_data, (
+            ('userInfo', 'user_info', 'user'),
+            ('user', None),
+            ('secUid', 'sec_uid'), {str}, any))
+
+    def _extract_sec_uid_from_app(self, user_name):
         try:
             user_data = self._call_api(
                 'user/detail', user_name,
@@ -112,24 +132,26 @@ user_helper = '''    def _extract_sec_uid_from_app(self, user_name):
 
 '''
 
-if "def _extract_sec_uid_from_app" not in text:
+if "def _extract_sec_uid_from_web_api" not in text:
     if user_marker not in text:
         print("ERROR: Could not locate TikTokUserIE secUid insertion marker", file=sys.stderr)
         sys.exit(5)
-    text = text.replace(user_marker, user_helper + user_marker, 1)
+    text = text.replace(user_marker, user_helpers + user_marker, 1)
 
 old_fallback = '''            else:
                 sec_uid = self._extract_sec_uid_from_embed(user_name)
                 fail_early = False
 '''
 new_fallback = '''            else:
-                sec_uid = self._extract_sec_uid_from_app(user_name)
+                sec_uid = self._extract_sec_uid_from_web_api(user_name)
+                if not sec_uid:
+                    sec_uid = self._extract_sec_uid_from_app(user_name)
                 if not sec_uid:
                     sec_uid = self._extract_sec_uid_from_embed(user_name)
                 fail_early = False
 '''
 
-if "sec_uid = self._extract_sec_uid_from_app(user_name)" not in text:
+if "sec_uid = self._extract_sec_uid_from_web_api(user_name)" not in text:
     if old_fallback not in text:
         print("ERROR: Could not locate TikTokUserIE fallback block", file=sys.stderr)
         sys.exit(6)
@@ -137,4 +159,4 @@ if "sec_uid = self._extract_sec_uid_from_app(user_name)" not in text:
 
 path.write_text(text, encoding="utf-8")
 print(f"Patched {path}")
-print("TikTok: Android app profile + video/slideshow parser + username->secUid API fallback enabled")
+print("TikTok: Android app profile + video/slideshow parser + web/API username->secUid fallbacks enabled")
