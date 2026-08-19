@@ -5,15 +5,27 @@ import sys
 path = Path('yt_dlp/extractor/tiktok.py')
 text = path.read_text(encoding='utf-8')
 
+# This patch runs AFTER patch_tiktok_retry.py and patch_tiktok_feed_fallback.py.
+# Therefore match the already-transformed app retry block, not pristine upstream.
 old_start = '''    def _real_extract(self, url):
         video_id, user_id = self._match_valid_url(url).group('id', 'user_id')
 
         if self._KNOWN_APP_INFO:
-            try:
-                return self._extract_aweme_app(video_id)
-            except ExtractorError as e:
-                e.expected = True
-                self.report_warning(f'{e}; trying with webpage')
+            for app_attempt in range(2):
+                try:
+                    return self._extract_aweme_app(video_id)
+                except ExtractorError as e:
+                    if app_attempt == 0 and not self._KNOWN_DEVICE_ID:
+                        self.report_warning(f'{e}; retrying TikTok app API with a fresh device session')
+                        self.__dict__.pop('_DEVICE_ID', None)
+                        self._APP_INFO_POOL = None
+                        self._APP_INFO = None
+                        self._APP_USER_AGENT = None
+                        time.sleep(random.uniform(1.0, 2.0))
+                        continue
+                    e.expected = True
+                    self.report_warning(f'{e}; trying with webpage')
+                    break
 '''
 new_start = '''    def _real_extract(self, url):
         video_id, user_id = self._match_valid_url(url).group('id', 'user_id')
@@ -33,16 +45,26 @@ new_start = '''    def _real_extract(self, url):
             self.write_debug('Preferring authenticated TikTok web path before app API')
 
         if self._KNOWN_APP_INFO and not has_auth_cookies:
-            try:
-                return self._extract_aweme_app(video_id)
-            except ExtractorError as e:
-                e.expected = True
-                self.report_warning(f'{e}; trying with webpage')
+            for app_attempt in range(2):
+                try:
+                    return self._extract_aweme_app(video_id)
+                except ExtractorError as e:
+                    if app_attempt == 0 and not self._KNOWN_DEVICE_ID:
+                        self.report_warning(f'{e}; retrying TikTok app API with a fresh device session')
+                        self.__dict__.pop('_DEVICE_ID', None)
+                        self._APP_INFO_POOL = None
+                        self._APP_INFO = None
+                        self._APP_USER_AGENT = None
+                        time.sleep(random.uniform(1.0, 2.0))
+                        continue
+                    e.expected = True
+                    self.report_warning(f'{e}; trying with webpage')
+                    break
 '''
 
 if 'Preferring authenticated TikTok web path before app API' not in text:
     if old_start not in text:
-        print('ERROR: Could not locate TikTokIE app-first block', file=sys.stderr)
+        print('ERROR: Could not locate TikTokIE retry-transformed app-first block', file=sys.stderr)
         sys.exit(2)
     text = text.replace(old_start, new_start, 1)
 
