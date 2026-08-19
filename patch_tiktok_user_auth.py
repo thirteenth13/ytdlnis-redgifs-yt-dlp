@@ -5,14 +5,21 @@ import sys
 path = Path('yt_dlp/extractor/tiktok.py')
 text = path.read_text(encoding='utf-8')
 
-# This patch runs after patch_tiktok_auth_cookies.py. Add Chrome impersonation
-# to private profile/feed requests and persist/reuse secUid mappings in yt-dlp cache.
+# This patch owns TikTokUserIE profile/feed auth and persistent secUid reuse.
+# Upstream now already uses impersonate=True for the profile page, so support
+# both the older and current request shapes.
 
-old_profile = '''        else:
+old_profile_legacy = '''        else:
             webpage = self._download_webpage(
                 self._UPLOADER_URL_FORMAT % user_name, user_name,
                 'Downloading user webpage', 'Unable to download user webpage',
                 fatal=False, headers=self._generate_blockbuster_headers()) or ''
+'''
+old_profile_current = '''        else:
+            webpage = self._download_webpage(
+                self._UPLOADER_URL_FORMAT % user_name, user_name,
+                'Downloading user webpage', 'Unable to download user webpage',
+                impersonate=True, fatal=False, headers=self._generate_blockbuster_headers()) or ''
 '''
 new_profile = '''        else:
             cookie_names = set(self._get_cookies('https://www.tiktok.com/'))
@@ -22,20 +29,21 @@ new_profile = '''        else:
             webpage = self._download_webpage(
                 self._UPLOADER_URL_FORMAT % user_name, user_name,
                 'Downloading user webpage', 'Unable to download user webpage',
-                fatal=False, headers=self._generate_blockbuster_headers(),
-                impersonate='chrome' if use_auth_impersonation else None) or ''
+                impersonate='chrome' if use_auth_impersonation else True,
+                fatal=False, headers=self._generate_blockbuster_headers()) or ''
 '''
 
 if 'Using Chrome impersonation for authenticated TikTok user profile request' not in text:
-    if old_profile not in text:
+    if old_profile_current in text:
+        text = text.replace(old_profile_current, new_profile, 1)
+    elif old_profile_legacy in text:
+        text = text.replace(old_profile_legacy, new_profile, 1)
+    else:
         print('ERROR: Could not locate TikTokUserIE profile webpage block', file=sys.stderr)
         sys.exit(2)
-    text = text.replace(old_profile, new_profile, 1)
 
-# YTDLnis watched-source downloads use the PROFILE URL together with -I N.
-# Therefore TikTokUserIE itself must consult the persistent secUid cache BEFORE
-# trying to resolve a private profile again. A secUid cached from any successful
-# direct video can then immediately drive the profile playlist.
+# YTDLnis watched-source downloads use the profile URL together with -I N.
+# Consult the persistent secUid cache before attempting private-profile lookup.
 old_real_start = '''    def _real_extract(self, url):
         user_name, sec_uid = self._match_id(url), None
         if re.fullmatch(r'MS4wLjABAAAA[\\w-]{64}', user_name):
