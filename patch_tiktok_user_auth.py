@@ -6,7 +6,7 @@ path = Path('yt_dlp/extractor/tiktok.py')
 text = path.read_text(encoding='utf-8')
 
 # This patch runs after patch_tiktok_auth_cookies.py. Add Chrome impersonation
-# to private profile/feed requests and persist secUid mappings in yt-dlp cache.
+# to private profile/feed requests and persist/reuse secUid mappings in yt-dlp cache.
 
 old_profile = '''        else:
             webpage = self._download_webpage(
@@ -32,6 +32,33 @@ if 'Using Chrome impersonation for authenticated TikTok user profile request' no
         sys.exit(2)
     text = text.replace(old_profile, new_profile, 1)
 
+# YTDLnis watched-source downloads use the PROFILE URL together with -I N.
+# Therefore TikTokUserIE itself must consult the persistent secUid cache BEFORE
+# trying to resolve a private profile again. A secUid cached from any successful
+# direct video can then immediately drive the profile playlist.
+old_real_start = '''    def _real_extract(self, url):
+        user_name, sec_uid = self._match_id(url), None
+        if re.fullmatch(r'MS4wLjABAAAA[\\w-]{64}', user_name):
+'''
+new_real_start = '''    def _real_extract(self, url):
+        user_name, sec_uid = self._match_id(url), None
+
+        if not re.fullmatch(r'MS4wLjABAAAA[\\w-]{64}', user_name):
+            cached_sec_uid = self._downloader.cache.load('tiktok-secuid', user_name)
+            if isinstance(cached_sec_uid, str) and cached_sec_uid.startswith('MS4wLjABAAAA'):
+                self.write_debug(f'Using cached TikTok secUid for watched profile @{user_name}')
+                return self.playlist_result(
+                    self._entries(cached_sec_uid, user_name, False), cached_sec_uid, user_name)
+
+        if re.fullmatch(r'MS4wLjABAAAA[\\w-]{64}', user_name):
+'''
+
+if 'Using cached TikTok secUid for watched profile' not in text:
+    if old_real_start not in text:
+        print('ERROR: Could not locate TikTokUserIE._real_extract start', file=sys.stderr)
+        sys.exit(3)
+    text = text.replace(old_real_start, new_real_start, 1)
+
 old_entries = '''    def _entries(self, sec_uid, user_name, fail_early=False):
         display_id = user_name or sec_uid
         seen_ids = set()
@@ -47,7 +74,7 @@ new_entries = '''    def _entries(self, sec_uid, user_name, fail_early=False):
 if "Cached TikTok secUid for @{user_name}" not in text:
     if old_entries not in text:
         print('ERROR: Could not locate TikTokUserIE._entries start', file=sys.stderr)
-        sys.exit(3)
+        sys.exit(4)
     text = text.replace(old_entries, new_entries, 1)
 
 old_feed = '''                response = self._download_json(
@@ -67,8 +94,8 @@ new_feed = '''                cookie_names = set(self._get_cookies('https://www.
 if 'Using Chrome impersonation for authenticated TikTok user feed requests' not in text:
     if old_feed not in text:
         print('ERROR: Could not locate TikTokUserIE user-feed request block', file=sys.stderr)
-        sys.exit(4)
+        sys.exit(5)
     text = text.replace(old_feed, new_feed, 1)
 
 path.write_text(text, encoding='utf-8')
-print(f'Patched {path}: authenticated TikTok user profile/feed requests use Chrome impersonation and cache secUid')
+print(f'Patched {path}: watched TikTok profiles reuse cached secUid; authenticated profile/feed requests use Chrome impersonation')
