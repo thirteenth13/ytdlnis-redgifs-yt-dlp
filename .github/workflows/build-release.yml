@@ -46,8 +46,6 @@ jobs:
       - name: Build platform-independent yt-dlp
         working-directory: upstream
         run: |
-          sudo apt-get update
-          sudo apt-get install -y zip make
           python devscripts/make_lazy_extractors.py
           make yt-dlp
           chmod +x yt-dlp
