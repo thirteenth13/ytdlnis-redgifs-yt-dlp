@@ -110,6 +110,57 @@ if 'authenticated web path failed, trying TikTok app API' not in text:
         sys.exit(3)
     text = text.replace(old_web, new_web, 1)
 
+# YTDLnis downloads selected items from a profile using -I N and the profile URL,
+# so TikTokUserIE must also use the authenticated browser fingerprint. Without
+# this, private profiles can fail to resolve secUid even though direct video URLs work.
+old_user_page = '''            webpage = self._download_webpage(
+                self._UPLOADER_URL_FORMAT % user_name, user_name,
+                'Downloading user webpage', 'Unable to download user webpage',
+                fatal=False, headers=self._generate_blockbuster_headers()) or ''
+'''
+new_user_page = '''            user_cookie_names = set(self._get_cookies('https://www.tiktok.com/'))
+            user_has_auth_cookies = bool(user_cookie_names & {'sessionid', 'sessionid_ss', 'sid_tt'})
+            if user_has_auth_cookies:
+                self.write_debug('Using Chrome impersonation for authenticated TikTok user profile request')
+            webpage = self._download_webpage(
+                self._UPLOADER_URL_FORMAT % user_name, user_name,
+                'Downloading user webpage', 'Unable to download user webpage',
+                fatal=False, headers=self._generate_blockbuster_headers(),
+                impersonate='chrome' if user_has_auth_cookies else None) or ''
+'''
+if 'Using Chrome impersonation for authenticated TikTok user profile request' not in text:
+    if old_user_page not in text:
+        print('ERROR: Could not locate TikTokUserIE profile webpage request', file=sys.stderr)
+        sys.exit(4)
+    text = text.replace(old_user_page, new_user_page, 1)
+
+# Our web API secUid helper is another web-facing request and needs the same
+# fingerprint when the cookie jar is authenticated.
+old_user_api = '''        user_data = self._download_json(
+            'https://www.tiktok.com/api/user/detail/', user_name,
+            note='Resolving secondary user ID with TikTok web API',
+            errnote='Unable to resolve secondary user ID with TikTok web API',
+            fatal=False,
+            headers=self._generate_blockbuster_headers(),
+            query={
+'''
+new_user_api = '''        user_cookie_names = set(self._get_cookies('https://www.tiktok.com/'))
+        user_has_auth_cookies = bool(user_cookie_names & {'sessionid', 'sessionid_ss', 'sid_tt'})
+        user_data = self._download_json(
+            'https://www.tiktok.com/api/user/detail/', user_name,
+            note='Resolving secondary user ID with TikTok web API',
+            errnote='Unable to resolve secondary user ID with TikTok web API',
+            fatal=False,
+            headers=self._generate_blockbuster_headers(),
+            impersonate='chrome' if user_has_auth_cookies else None,
+            query={
+'''
+if "impersonate='chrome' if user_has_auth_cookies else None" not in text.split('def _extract_sec_uid_from_web_api', 1)[-1].split('def _extract_sec_uid_from_app', 1)[0]:
+    if old_user_api not in text:
+        print('ERROR: Could not locate TikTokUserIE web API secUid request', file=sys.stderr)
+        sys.exit(5)
+    text = text.replace(old_user_api, new_user_api, 1)
+
 path.write_text(text, encoding='utf-8')
 print(f'Patched {path}')
-print('TikTok: logged-in cookies now prefer authenticated web path; app API and user-feed remain fallbacks')
+print('TikTok: logged-in cookies now prefer authenticated web path for posts and user profiles; app API and user-feed remain fallbacks')
