@@ -8,8 +8,8 @@ text = path.read_text(encoding='utf-8')
 helper_marker = "    def _real_extract(self, url):\n"
 helper = '''    def _extract_aweme_from_user_feed(self, url, video_id):
         # Last-resort fallback for authenticated/private TikTok posts.
-        # Resolve secUid from several representations of the authenticated
-        # profile page, then walk the user feed deeply enough for old posts.
+        # Reuse a persistently cached secUid whenever possible, then fall back
+        # to resolving it from authenticated profile data and walk the feed.
         try:
             path_parts = [p for p in urllib.parse.urlparse(url).path.split('/') if p]
             user_name = next((p[1:] for p in path_parts if p.startswith('@')), None)
@@ -19,9 +19,14 @@ helper = '''    def _extract_aweme_from_user_feed(self, url, video_id):
             user_ie = TikTokUserIE(self._downloader)
             cookie_names = set(user_ie._get_cookies('https://www.tiktok.com/'))
             use_auth_impersonation = bool(cookie_names & {'sessionid', 'sessionid_ss', 'sid_tt'})
-            sec_uid = None
 
-            if use_auth_impersonation:
+            sec_uid = self._downloader.cache.load('tiktok-secuid', user_name)
+            if isinstance(sec_uid, str) and sec_uid.startswith('MS4wLjABAAAA'):
+                self.write_debug(f'Using cached TikTok secUid for @{user_name}')
+            else:
+                sec_uid = None
+
+            if not sec_uid and use_auth_impersonation:
                 self.write_debug('Resolving TikTok user-feed secUid from authenticated profile page')
                 profile_page = user_ie._download_webpage(
                     user_ie._UPLOADER_URL_FORMAT % user_name, user_name,
@@ -30,7 +35,6 @@ helper = '''    def _extract_aweme_from_user_feed(self, url, video_id):
                     fatal=False, headers=user_ie._generate_blockbuster_headers(),
                     impersonate='chrome') or ''
 
-                # First use yt-dlp's normal universal-data parser.
                 try:
                     universal = user_ie._get_universal_data(profile_page, user_name) or {}
                 except Exception:
@@ -38,9 +42,6 @@ helper = '''    def _extract_aweme_from_user_feed(self, url, video_id):
                 profile_detail = traverse_obj(universal, ('webapp.user-detail', {dict})) or {}
                 sec_uid = traverse_obj(profile_detail, ('userInfo', 'user', 'secUid', {str}))
 
-                # TikTok changes the JSON layout frequently. For an already
-                # authenticated page, accept a secUid found anywhere in the
-                # embedded JSON/HTML as long as it has the expected MS4w... form.
                 if not sec_uid:
                     sec_uid = self._search_regex(
                         (r'"secUid"\\s*:\\s*"(MS4wLjABAAAA[^"\\\\]+)"',
@@ -61,11 +62,12 @@ helper = '''    def _extract_aweme_from_user_feed(self, url, video_id):
                 self.report_warning('Unable to resolve TikTok secUid for user-feed fallback', video_id=video_id)
                 return None
 
+            if isinstance(sec_uid, str) and sec_uid.startswith('MS4wLjABAAAA'):
+                self._downloader.cache.store('tiktok-secuid', user_name, sec_uid)
+                self.write_debug(f'Cached TikTok secUid for @{user_name}')
+
             cursor = int(time.time() * 1E3)
             seen_cursors = set()
-            # A direct request may target a post several years old. Walk up to
-            # 250 feed pages, stopping on exhaustion/repeated cursors. This is
-            # still bounded but no longer limited to only the newest few posts.
             for page in range(1, 251):
                 if cursor in seen_cursors:
                     break
@@ -139,4 +141,4 @@ if 'trying TikTok user-feed fallback' not in text:
 
 path.write_text(text, encoding='utf-8')
 print(f'Patched {path}')
-print('TikTok: private-profile secUid parsing expanded; user-feed fallback searches up to 250 pages')
+print('TikTok: private-profile secUid is persistently cached; user-feed fallback searches up to 250 pages')
