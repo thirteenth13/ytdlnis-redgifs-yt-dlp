@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 from pathlib import Path
+import sys
 
 path = Path('yt_dlp/extractor/onlyfans.py')
 path.write_text(r'''import hashlib
@@ -64,15 +65,12 @@ class OnlyFansBaseIE(InfoExtractor):
         entries = []
         for idx, media in enumerate(post.get('media') or (), 1):
             media_type = media.get('type')
-            files = media.get('files') or {}
-            # Only expose direct non-DRM files. DRM manifests/licenses are intentionally unsupported.
             url = traverse_obj(media, (
                 ('source', ('files', 'full', 'url'), ('files', 'source', 'url'), 'url'),
                 {url_or_none}, any))
             if not url:
                 continue
             media_id = str(media.get('id') or f'{post_id}_{idx:02d}')
-            ext = 'mp4' if media_type == 'video' else None
             entry = {
                 'id': media_id,
                 'title': title,
@@ -82,7 +80,7 @@ class OnlyFansBaseIE(InfoExtractor):
                 'timestamp': int_or_none(post.get('postedAtPrecise')),
             }
             if media_type == 'video':
-                entry.update({'url': url, 'ext': ext})
+                entry.update({'url': url, 'ext': 'mp4'})
             else:
                 entry.update({
                     'formats': [{'format_id': 'onlyfans_image', 'url': url, 'vcodec': 'none', 'acodec': 'none'}],
@@ -152,3 +150,24 @@ class OnlyFansUserIE(OnlyFansBaseIE):
         return self.playlist_result(self._entries(user_id, username), str(user_id), profile.get('name') or username)
 ''', encoding='utf-8')
 print(f'Created {path}: OnlyFans profile/post extractor for authenticated non-DRM media')
+
+# yt-dlp only loads extractors imported by yt_dlp/extractor/_extractors.py.
+# Creating onlyfans.py alone is not enough; without this import every OnlyFans URL
+# falls through to Generic and becomes "Unsupported URL".
+registry = Path('yt_dlp/extractor/_extractors.py')
+registry_text = registry.read_text(encoding='utf-8')
+import_block = '''from .onlyfans import (\n    OnlyFansPostIE,\n    OnlyFansUserIE,\n)\n'''
+if 'OnlyFansPostIE' not in registry_text:
+    marker = 'from .ondemandkorea import OnDemandKoreaIE\n'
+    if marker in registry_text:
+        registry_text = registry_text.replace(marker, marker + import_block, 1)
+    else:
+        # Fallback: append the import. Import order is not semantically important.
+        registry_text += '\n' + import_block
+    registry.write_text(registry_text, encoding='utf-8')
+
+check = registry.read_text(encoding='utf-8')
+if 'OnlyFansPostIE' not in check or 'OnlyFansUserIE' not in check:
+    print('ERROR: OnlyFans extractors were not registered in _extractors.py', file=sys.stderr)
+    sys.exit(2)
+print('Registered OnlyFansPostIE and OnlyFansUserIE in yt_dlp/extractor/_extractors.py')
