@@ -4,6 +4,7 @@ import sys
 
 path = Path('yt_dlp/extractor/onlyfans.py')
 path.write_text(r'''import hashlib
+import re
 import time
 from urllib.parse import urlencode, urlparse
 
@@ -17,6 +18,7 @@ class OnlyFansBaseIE(InfoExtractor):
     _DEFAULT_UA = (
         'Mozilla/5.0 (Linux; Android 14; K) AppleWebKit/537.36 '
         '(KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36')
+    _AUTO_X_BC = None
 
     def _auth_id(self):
         cookies = self._get_cookies('https://onlyfans.com/')
@@ -42,7 +44,58 @@ class OnlyFansBaseIE(InfoExtractor):
         configured = self.get_param('http_headers') or {}
         return configured.get('User-Agent') or configured.get('user-agent') or self._DEFAULT_UA
 
-    def _x_bc(self):
+    def _bootstrap_x_bc(self, video_id=None):
+        if self._AUTO_X_BC:
+            return self._AUTO_X_BC
+
+        page_url = 'https://onlyfans.com/'
+        if video_id and not str(video_id).isdigit():
+            page_url = f'https://onlyfans.com/{video_id}'
+
+        self.write_debug('Trying to auto-detect OnlyFans x-bc from authenticated browser page')
+        try:
+            webpage, handle = self._download_webpage_handle(
+                page_url, str(video_id or 'onlyfans'),
+                note='Bootstrapping OnlyFans browser session', fatal=False,
+                headers={'User-Agent': self._user_agent()}, impersonate='chrome')
+        except Exception as e:
+            self.write_debug(f'OnlyFans x-bc bootstrap page failed: {e}')
+            return None
+
+        # Some deployments/proxies can expose it as a response header.
+        if handle:
+            headers = getattr(handle, 'headers', None) or {}
+            for key in ('x-bc', 'X-BC', 'X-Bc'):
+                try:
+                    value = headers.get(key)
+                except Exception:
+                    value = None
+                if value:
+                    self._AUTO_X_BC = value
+                    self.write_debug('Auto-detected OnlyFans x-bc from response headers')
+                    return value
+
+        if not webpage:
+            return None
+
+        # Best-effort extraction from server-rendered bootstrap state / inline JS.
+        patterns = (
+            r'["\']x-bc["\']\s*[:=]\s*["\']([^"\']{20,})',
+            r'["\']x_bc["\']\s*[:=]\s*["\']([^"\']{20,})',
+            r'\bx-bc\b\\?"?\s*[:=]\s*\\?["\']([^"\'\\\s]{20,})',
+        )
+        for pattern in patterns:
+            match = re.search(pattern, webpage, flags=re.I)
+            if match:
+                value = match.group(1).replace('\\/', '/').replace('\\u002F', '/')
+                self._AUTO_X_BC = value
+                self.write_debug('Auto-detected OnlyFans x-bc from authenticated page bootstrap data')
+                return value
+
+        self.write_debug('Authenticated OnlyFans page did not expose x-bc in HTML/response headers')
+        return None
+
+    def _x_bc(self, video_id=None):
         values = self._configuration_arg('x_bc', ie_key='OnlyFans')
         if values and values[0]:
             return values[0]
@@ -53,10 +106,14 @@ class OnlyFansBaseIE(InfoExtractor):
             if cookie and cookie.value:
                 return cookie.value
 
+        auto_value = self._bootstrap_x_bc(video_id)
+        if auto_value:
+            return auto_value
+
         raise ExtractorError(
-            'OnlyFans requires the x-bc value from the same logged-in browser session. '
-            'Pass it with --extractor-args "onlyfans:x_bc=VALUE". '
-            'A generated x-bc is not reliable for authenticated requests.', expected=True)
+            'OnlyFans x-bc is not present in cookies and was not exposed by the authenticated webpage. '
+            'The browser normally generates/stores it outside the cookie jar. '
+            'Pass it once with --extractor-args "onlyfans:x_bc=VALUE".', expected=True)
 
     def _signed_json(self, url, video_id, *, note=None, query=None):
         rules = self._rules()
@@ -77,7 +134,7 @@ class OnlyFansBaseIE(InfoExtractor):
             'Referer': 'https://onlyfans.com/',
             'User-Agent': self._user_agent(),
             'User-Id': auth_id,
-            'X-BC': self._x_bc(),
+            'X-BC': self._x_bc(video_id),
             'Time': timestamp,
             'Sign': rules['format'].format(sha1, abs(checksum)),
         }
@@ -87,7 +144,6 @@ class OnlyFansBaseIE(InfoExtractor):
                     headers.pop(key, None)
 
         self.write_debug(f'OnlyFans signed API path: {signed_path}')
-        self.write_debug('Using explicit OnlyFans x-bc token for authenticated API request')
         return self._download_json(
             request_url, video_id, note=note, headers=headers, impersonate='chrome')
 
