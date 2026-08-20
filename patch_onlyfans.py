@@ -3,9 +3,7 @@ from pathlib import Path
 import sys
 
 path = Path('yt_dlp/extractor/onlyfans.py')
-path.write_text(r'''import base64
-import hashlib
-import random
+path.write_text(r'''import hashlib
 import time
 from urllib.parse import urlencode, urlparse
 
@@ -38,42 +36,31 @@ class OnlyFansBaseIE(InfoExtractor):
         return rules
 
     def _user_agent(self):
+        values = self._configuration_arg('user_agent', ie_key='OnlyFans')
+        if values and values[0]:
+            return values[0]
         configured = self.get_param('http_headers') or {}
         return configured.get('User-Agent') or configured.get('user-agent') or self._DEFAULT_UA
 
     def _x_bc(self):
-        # Prefer an explicitly supplied browser x-bc token when available:
-        #   --extractor-args "onlyfans:x_bc=..."
         values = self._configuration_arg('x_bc', ie_key='OnlyFans')
         if values and values[0]:
             return values[0]
 
-        # Some cookie exports/custom jars may carry it even though normal browsers
-        # usually keep x-bc outside the cookie jar.
         cookies = self._get_cookies('https://onlyfans.com/')
         for name in ('x-bc', 'x_bc'):
             cookie = cookies.get(name)
             if cookie and cookie.value:
                 return cookie.value
 
-        # Compatible fallback used by current OnlyFans tooling for an x-bc token.
-        parts = [
-            int(time.time() * 1000),
-            int(1e12 * random.random()),
-            int(1e12 * random.random()),
-            self._user_agent(),
-        ]
-        message = '.'.join(base64.b64encode(str(p).encode()).decode() for p in parts)
-        generated = hashlib.sha1(message.encode()).hexdigest()
-        self.write_debug('Generated temporary OnlyFans x-bc token; pass extractor arg onlyfans:x_bc=... if API rejects it')
-        return generated
+        raise ExtractorError(
+            'OnlyFans requires the x-bc value from the same logged-in browser session. '
+            'Pass it with --extractor-args "onlyfans:x_bc=VALUE". '
+            'A generated x-bc is not reliable for authenticated requests.', expected=True)
 
     def _signed_json(self, url, video_id, *, note=None, query=None):
         rules = self._rules()
         auth_id = self._auth_id()
-
-        # Sign the exact URL that will be requested. Do not let the networking
-        # layer reconstruct the query string after the signature is calculated.
         request_url = url
         if query:
             request_url = f'{url}?{urlencode(query)}'
@@ -100,6 +87,7 @@ class OnlyFansBaseIE(InfoExtractor):
                     headers.pop(key, None)
 
         self.write_debug(f'OnlyFans signed API path: {signed_path}')
+        self.write_debug('Using explicit OnlyFans x-bc token for authenticated API request')
         return self._download_json(
             request_url, video_id, note=note, headers=headers, impersonate='chrome')
 
