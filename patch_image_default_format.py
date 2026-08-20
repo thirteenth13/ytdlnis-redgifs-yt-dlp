@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 from pathlib import Path
+import runpy
 import sys
 
 # First normalize the custom TikTok slideshow child formats. yt-dlp's common-field
@@ -64,3 +65,15 @@ if "return 'tiktok_image'" not in check:
     sys.exit(3)
 
 print("Patched TikTok slideshow images: exact format id 'tiktok_image' is selected by default")
+
+# Keep the workflow stable: this script is already executed on every build, so use
+# it as the integration point for the independent OnlyFans extractor patch.
+onlyfans_patch = Path('../patch_onlyfans.py')
+if onlyfans_patch.exists():
+    runpy.run_path(str(onlyfans_patch), run_name='__main__')
+    if not Path('yt_dlp/extractor/onlyfans.py').exists():
+        print('ERROR: OnlyFans extractor was not created', file=sys.stderr)
+        sys.exit(4)
+else:
+    print('ERROR: patch_onlyfans.py is missing', file=sys.stderr)
+    sys.exit(4)
