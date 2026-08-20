@@ -3,9 +3,6 @@ from pathlib import Path
 import runpy
 import sys
 
-# First normalize the custom TikTok slideshow child formats. yt-dlp's common-field
-# processing treats image extensions as codec-less (vcodec=none, acodec=none), so
-# selecting them with a vcodec=images filter does not work after sanitization.
 tiktok_path = Path('yt_dlp/extractor/tiktok.py')
 tiktok = tiktok_path.read_text(encoding='utf-8')
 old_image_format = '''                    'format_id': '0',
@@ -30,11 +27,17 @@ if "'format_id': 'tiktok_image'" not in tiktok_path.read_text(encoding='utf-8'):
 
 path = Path('yt_dlp/YoutubeDL.py')
 text = path.read_text(encoding='utf-8')
-
 old = '''    def _default_format_spec(self, info_dict):
         prefer_best = (
 '''
-old_previous_patch = '''    def _default_format_spec(self, info_dict):
+old_tiktok = '''    def _default_format_spec(self, info_dict):
+        formats = self._get_formats(info_dict)
+        if formats and any(f.get('format_id') == 'tiktok_image' for f in formats):
+            return 'tiktok_image'
+
+        prefer_best = (
+'''
+old_previous = '''    def _default_format_spec(self, info_dict):
         formats = self._get_formats(info_dict)
         if formats and all(f.get('vcodec') == 'images' for f in formats):
             return '*[vcodec=images]'
@@ -43,15 +46,17 @@ old_previous_patch = '''    def _default_format_spec(self, info_dict):
 '''
 new = '''    def _default_format_spec(self, info_dict):
         formats = self._get_formats(info_dict)
-        if formats and any(f.get('format_id') == 'tiktok_image' for f in formats):
-            return 'tiktok_image'
+        for image_format_id in ('tiktok_image', 'onlyfans_image'):
+            if formats and any(f.get('format_id') == image_format_id for f in formats):
+                return image_format_id
 
         prefer_best = (
 '''
-
-if "return 'tiktok_image'" not in text:
-    if old_previous_patch in text:
-        text = text.replace(old_previous_patch, new, 1)
+if "'onlyfans_image'" not in text:
+    if old_tiktok in text:
+        text = text.replace(old_tiktok, new, 1)
+    elif old_previous in text:
+        text = text.replace(old_previous, new, 1)
     elif old in text:
         text = text.replace(old, new, 1)
     else:
@@ -60,14 +65,11 @@ if "return 'tiktok_image'" not in text:
     path.write_text(text, encoding='utf-8')
 
 check = path.read_text(encoding='utf-8')
-if "return 'tiktok_image'" not in check:
-    print('ERROR: TikTok image default format patch missing after write', file=sys.stderr)
+if "'tiktok_image', 'onlyfans_image'" not in check:
+    print('ERROR: image default format patch missing after write', file=sys.stderr)
     sys.exit(3)
+print('Patched image-only entries: TikTok and OnlyFans exact image formats are selected by default')
 
-print("Patched TikTok slideshow images: exact format id 'tiktok_image' is selected by default")
-
-# Keep the workflow stable: this script is already executed on every build, so use
-# it as the integration point for the independent OnlyFans extractor patch.
 onlyfans_patch = Path('../patch_onlyfans.py')
 if onlyfans_patch.exists():
     runpy.run_path(str(onlyfans_patch), run_name='__main__')
