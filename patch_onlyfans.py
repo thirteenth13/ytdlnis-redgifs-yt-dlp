@@ -3,9 +3,11 @@ from pathlib import Path
 import sys
 
 path = Path('yt_dlp/extractor/onlyfans.py')
-path.write_text(r'''import hashlib
+path.write_text(r'''import base64
+import hashlib
+import random
 import time
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 
 from .common import InfoExtractor
 from ..utils import ExtractorError, int_or_none, traverse_obj, url_or_none
@@ -14,13 +16,18 @@ from ..utils import ExtractorError, int_or_none, traverse_obj, url_or_none
 class OnlyFansBaseIE(InfoExtractor):
     _RULES_URL = 'https://raw.githubusercontent.com/DATAHOARDERS/dynamic-rules/main/onlyfans.json'
     _API = 'https://onlyfans.com/api2/v2'
+    _DEFAULT_UA = (
+        'Mozilla/5.0 (Linux; Android 14; K) AppleWebKit/537.36 '
+        '(KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36')
 
     def _auth_id(self):
         cookies = self._get_cookies('https://onlyfans.com/')
         auth_id = cookies.get('auth_id')
-        if not auth_id:
+        sess = cookies.get('sess')
+        if not auth_id or not sess:
             raise ExtractorError(
-                'OnlyFans login cookies are required. Import cookies from a logged-in OnlyFans session', expected=True)
+                'OnlyFans auth_id and sess cookies are required. Import cookies from a logged-in OnlyFans session',
+                expected=True)
         return auth_id.value
 
     def _rules(self):
@@ -30,32 +37,71 @@ class OnlyFansBaseIE(InfoExtractor):
             raise ExtractorError('OnlyFans dynamic signing rules are incomplete', expected=True)
         return rules
 
+    def _user_agent(self):
+        configured = self.get_param('http_headers') or {}
+        return configured.get('User-Agent') or configured.get('user-agent') or self._DEFAULT_UA
+
+    def _x_bc(self):
+        # Prefer an explicitly supplied browser x-bc token when available:
+        #   --extractor-args "onlyfans:x_bc=..."
+        values = self._configuration_arg('x_bc', ie_key='OnlyFans')
+        if values and values[0]:
+            return values[0]
+
+        # Some cookie exports/custom jars may carry it even though normal browsers
+        # usually keep x-bc outside the cookie jar.
+        cookies = self._get_cookies('https://onlyfans.com/')
+        for name in ('x-bc', 'x_bc'):
+            cookie = cookies.get(name)
+            if cookie and cookie.value:
+                return cookie.value
+
+        # Compatible fallback used by current OnlyFans tooling for an x-bc token.
+        parts = [
+            int(time.time() * 1000),
+            int(1e12 * random.random()),
+            int(1e12 * random.random()),
+            self._user_agent(),
+        ]
+        message = '.'.join(base64.b64encode(str(p).encode()).decode() for p in parts)
+        generated = hashlib.sha1(message.encode()).hexdigest()
+        self.write_debug('Generated temporary OnlyFans x-bc token; pass extractor arg onlyfans:x_bc=... if API rejects it')
+        return generated
+
     def _signed_json(self, url, video_id, *, note=None, query=None):
         rules = self._rules()
         auth_id = self._auth_id()
+
+        # Sign the exact URL that will be requested. Do not let the networking
+        # layer reconstruct the query string after the signature is calculated.
+        request_url = url
         if query:
-            from urllib.parse import urlencode
-            sign_url = f'{url}?{urlencode(query)}'
-        else:
-            sign_url = url
-        parsed = urlparse(sign_url)
-        path = parsed.path + (f'?{parsed.query}' if parsed.query else '')
+            request_url = f'{url}?{urlencode(query)}'
+        parsed = urlparse(request_url)
+        signed_path = parsed.path + (f'?{parsed.query}' if parsed.query else '')
+
         timestamp = str(round(time.time() * 1000))
-        message = '\n'.join((rules['static_param'], timestamp, path, auth_id)).encode()
+        message = '\n'.join((rules['static_param'], timestamp, signed_path, auth_id)).encode()
         sha1 = hashlib.sha1(message).hexdigest()
         checksum = sum(ord(sha1[i]) for i in rules['checksum_indexes']) + rules['checksum_constant']
         headers = {
             'Accept': 'application/json, text/plain, */*',
             'App-Token': rules['app_token'],
             'Referer': 'https://onlyfans.com/',
+            'User-Agent': self._user_agent(),
             'User-Id': auth_id,
+            'X-BC': self._x_bc(),
             'Time': timestamp,
             'Sign': rules['format'].format(sha1, abs(checksum)),
         }
         for header in rules.get('remove_headers') or ():
-            headers.pop(header, None)
-            headers.pop(header.title(), None)
-        return self._download_json(url, video_id, note=note, query=query, headers=headers, impersonate=True)
+            for key in tuple(headers):
+                if key.lower() == header.lower():
+                    headers.pop(key, None)
+
+        self.write_debug(f'OnlyFans signed API path: {signed_path}')
+        return self._download_json(
+            request_url, video_id, note=note, headers=headers, impersonate='chrome')
 
     def _media_entries(self, post, username=None):
         post_id = str(post.get('id') or '')
@@ -151,9 +197,6 @@ class OnlyFansUserIE(OnlyFansBaseIE):
 ''', encoding='utf-8')
 print(f'Created {path}: OnlyFans profile/post extractor for authenticated non-DRM media')
 
-# yt-dlp only loads extractors imported by yt_dlp/extractor/_extractors.py.
-# Creating onlyfans.py alone is not enough; without this import every OnlyFans URL
-# falls through to Generic and becomes "Unsupported URL".
 registry = Path('yt_dlp/extractor/_extractors.py')
 registry_text = registry.read_text(encoding='utf-8')
 import_block = '''from .onlyfans import (\n    OnlyFansPostIE,\n    OnlyFansUserIE,\n)\n'''
@@ -162,7 +205,6 @@ if 'OnlyFansPostIE' not in registry_text:
     if marker in registry_text:
         registry_text = registry_text.replace(marker, marker + import_block, 1)
     else:
-        # Fallback: append the import. Import order is not semantically important.
         registry_text += '\n' + import_block
     registry.write_text(registry_text, encoding='utf-8')
 
