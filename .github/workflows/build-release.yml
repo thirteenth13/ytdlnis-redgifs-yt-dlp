@@ -24,7 +24,7 @@ jobs:
         run: |
           git clone --depth=1 https://github.com/yt-dlp/yt-dlp.git upstream
 
-      - name: Apply RedGifs and TikTok patches
+      - name: Apply RedGifs, TikTok and OnlyFans patches
         working-directory: upstream
         run: |
           python ../patch_redgifs.py
@@ -36,6 +36,7 @@ jobs:
           python ../patch_image_default_format.py
           python -m py_compile yt_dlp/extractor/redgifs.py
           python -m py_compile yt_dlp/extractor/tiktok.py
+          python -m py_compile yt_dlp/extractor/onlyfans.py
           python -m py_compile yt_dlp/YoutubeDL.py
           grep -n -A5 -B2 "musical_ly/35.1.3/2023501030/1233" yt_dlp/extractor/tiktok.py
           grep -n -A12 -B2 "_parse_aweme_slideshow_app" yt_dlp/extractor/tiktok.py
@@ -44,26 +45,28 @@ jobs:
           grep -n -A10 -B2 "Preferring authenticated TikTok web path before app API" yt_dlp/extractor/tiktok.py
           grep -n -A8 -B2 "Using Chrome impersonation for authenticated TikTok user profile request" yt_dlp/extractor/tiktok.py
           grep -n -A8 -B2 "Using Chrome impersonation for authenticated TikTok user feed requests" yt_dlp/extractor/tiktok.py
-          grep -n -A4 -B2 "return 'tiktok_image'" yt_dlp/YoutubeDL.py
+          grep -n -A6 -B2 "for image_format_id in ('tiktok_image', 'onlyfans_image')" yt_dlp/YoutubeDL.py
+          grep -n -A6 -B2 "class OnlyFans" yt_dlp/extractor/onlyfans.py
 
-      - name: Verify TikTok image default selector
+      - name: Verify image default selector
         working-directory: upstream
         run: |
           python - <<'PY'
           from yt_dlp import YoutubeDL
           ydl = YoutubeDL({'quiet': True})
-          info = {'formats': [{
-              'format_id': 'tiktok_image',
-              'url': 'https://example.invalid/image.jpg',
-              'ext': 'jpeg',
-              'vcodec': 'none',
-              'acodec': 'none',
-          }]}
-          got = ydl._default_format_spec(info)
-          assert got == 'tiktok_image', got
-          selected = ydl._select_formats(info['formats'], ydl.build_format_selector(got))
-          assert len(selected) == 1 and selected[0]['format_id'] == 'tiktok_image', selected
-          print('TikTok image exact-format selector smoke test: OK ->', got)
+          for format_id in ('tiktok_image', 'onlyfans_image'):
+              info = {'formats': [{
+                  'format_id': format_id,
+                  'url': 'https://example.invalid/image.jpg',
+                  'ext': 'jpeg',
+                  'vcodec': 'none',
+                  'acodec': 'none',
+              }]}
+              got = ydl._default_format_spec(info)
+              assert got == format_id, (format_id, got)
+              selected = ydl._select_formats(info['formats'], ydl.build_format_selector(got))
+              assert len(selected) == 1 and selected[0]['format_id'] == format_id, selected
+              print('Exact image-format selector smoke test: OK ->', got)
           PY
 
       - name: Set build version and origin
@@ -91,7 +94,7 @@ jobs:
           import zipfile
           z = zipfile.ZipFile('yt-dlp')
           data = z.read('yt_dlp/YoutubeDL.py').decode('utf-8')
-          assert "return 'tiktok_image'" in data
+          assert "'tiktok_image', 'onlyfans_image'" in data
           tiktok = z.read('yt_dlp/extractor/tiktok.py').decode('utf-8')
           assert "'format_id': 'tiktok_image'" in tiktok
           assert 'trying TikTok user-feed fallback' in tiktok
@@ -99,7 +102,10 @@ jobs:
           assert 'authenticated web path failed, trying TikTok app API' in tiktok
           assert 'Using Chrome impersonation for authenticated TikTok user profile request' in tiktok
           assert 'Using Chrome impersonation for authenticated TikTok user feed requests' in tiktok
-          print('Built yt-dlp contains TikTok image selector, private-profile impersonation, user-feed fallback, and authenticated-cookie priority: OK')
+          onlyfans = z.read('yt_dlp/extractor/onlyfans.py').decode('utf-8')
+          assert 'OnlyFans' in onlyfans
+          assert 'onlyfans_image' in onlyfans
+          print('Built yt-dlp contains TikTok, RedGifs and OnlyFans custom patches: OK')
           PY
 
       - name: Create updater metadata
@@ -176,7 +182,7 @@ jobs:
             _update_spec \
             --repo "${GITHUB_REPOSITORY}" \
             --title "Patched yt-dlp ${VERSION}" \
-            --notes "yt-dlp master with RedGifs thumbnail support and TikTok video/slideshow support, authenticated private-profile Chrome impersonation, conservative retries, exact image-format selection, and user-feed fallback." \
+            --notes "yt-dlp master with RedGifs thumbnail support, TikTok video/slideshow/private-profile patches, and experimental authenticated OnlyFans non-DRM media support." \
             --latest
 
           # Keep all previous releases/tags.
